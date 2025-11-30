@@ -60,7 +60,10 @@ def generate_hex_background():
     # Use the hex_bg.png from fonts folder if available
     hex_bg_path = os.path.join(FONTS_DIR, "hex_bg.png")
     if os.path.exists(hex_bg_path):
-        return Image.open(hex_bg_path).convert("RGBA")
+        try:
+            return Image.open(hex_bg_path).convert("RGBA")
+        except Exception:
+            pass  # Fall through to programmatic generation
     
     # Otherwise generate programmatically
     img = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), BG_COLOR)
