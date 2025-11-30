@@ -14,14 +14,21 @@ bot = telebot.TeleBot(API_TOKEN)
 # Fonts
 FONTS_DIR = "fonts"
 try:
-    # Use root BebasNeue-Regular.ttf for title (the one in fonts/ is empty)
-    TITLE_FONT = ImageFont.truetype("BebasNeue-Regular.ttf", 160)
-    # Use available Roboto variants (Bold, Medium, Regular are empty in fonts/)
-    BOLD_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-SemiBold.ttf"), 42)
-    MEDIUM_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-SemiBold.ttf"), 36)
+    # Use root BebasNeue-Regular.ttf for title
+    if os.path.exists("BebasNeue-Regular.ttf"):
+        TITLE_FONT_PATH = "BebasNeue-Regular.ttf"
+    else:
+        TITLE_FONT_PATH = os.path.join(FONTS_DIR, "BebasNeue-Regular.ttf")
+
+    TITLE_FONT = ImageFont.truetype(TITLE_FONT_PATH, 160)
+
+    # Use available Roboto variants from fonts/
+    BOLD_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-Bold.ttf"), 42)
+    MEDIUM_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-Medium.ttf"), 36)
     REG_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-Light.ttf"), 30)
-    GENRE_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-SemiBold.ttf"), 38)
-except:
+    GENRE_FONT = ImageFont.truetype(os.path.join(FONTS_DIR, "Roboto-Medium.ttf"), 38)
+except Exception as e:
+    print(f"Font loading error: {e}")
     TITLE_FONT = ImageFont.load_default()
     BOLD_FONT = ImageFont.load_default()
     MEDIUM_FONT = ImageFont.load_default()
@@ -33,62 +40,11 @@ LOGO_FONT = MEDIUM_FONT
 CANVAS_WIDTH, CANVAS_HEIGHT = 1280, 720
 
 # Colors
-BG_COLOR = (20, 35, 60) # Bluish Dark Background
-HEX_OUTLINE = (40, 55, 85)  # Lighter blue outline for background grid
 TEXT_COLOR = (255, 255, 255)
 SUBTEXT_COLOR = (210, 210, 210)
 GENRE_COLOR = (140, 150, 190) # Bluish grey
 BUTTON_BG = (40, 60, 100) # Blue button bg
 LOGO_COLOR = (255, 255, 255)
-HONEYCOMB_OUTLINE_COLOR = (255, 255, 255)
-HONEYCOMB_STROKE = 6
-
-# Helper Functions
-def draw_regular_polygon(draw, center, radius, n_sides=6, rotation=30, fill=None, outline=None, width=1):
-    points = []
-    for i in range(n_sides):
-        angle = math.radians(rotation + 360 / n_sides * i)
-        x = center[0] + radius * math.cos(angle)
-        y = center[1] + radius * math.sin(angle)
-        points.append((x, y))
-    if fill:
-        draw.polygon(points, fill=fill)
-    if outline:
-        draw.polygon(points, outline=outline, width=width)
-
-def generate_hex_background():
-    # Use the hex_bg.png from fonts folder if available
-    hex_bg_path = os.path.join(FONTS_DIR, "hex_bg.png")
-    if os.path.exists(hex_bg_path):
-        try:
-            return Image.open(hex_bg_path).convert("RGBA")
-        except Exception:
-            pass  # Fall through to programmatic generation
-    
-    # Otherwise generate programmatically
-    img = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), BG_COLOR)
-    draw = ImageDraw.Draw(img)
-
-    # Background Grid
-    hex_radius = 55
-    import math
-    dx = math.sqrt(3) * hex_radius
-    dy = 1.5 * hex_radius
-
-    cols = int(CANVAS_WIDTH / dx) + 2
-    rows = int(CANVAS_HEIGHT / dy) + 2
-
-    for row in range(rows):
-        for col in range(cols):
-            cx = col * dx
-            cy = row * dy
-            if row % 2 == 1:
-                cx += dx / 2
-
-            # Draw faint outline
-            draw_regular_polygon(draw, (cx, cy), hex_radius, outline=HEX_OUTLINE, width=2)
-
-    return img
 
 def wrap_text(text, font, max_width):
     avg_char_width = font.getlength('x')
@@ -96,50 +52,135 @@ def wrap_text(text, font, max_width):
     wrapped = textwrap.fill(text, width=chars_per_line)
     return wrapped.split('\n')
 
+def add_gradient(image):
+    # Add a horizontal gradient from black (left) to transparent (right)
+    # to make text readable on the left side
+    width, height = image.size
+    gradient = Image.new('L', (width, height), color=0)
+    draw = ImageDraw.Draw(gradient)
+
+    # Create gradient: 0 to 255 (left to right)
+    # But we want opaque black on left (255 alpha) fading to transparent (0 alpha)
+    # So we draw opacity mask
+
+    for x in range(width):
+        # Opacity decreases as x increases
+        # Start fully opaque (255) until x=600, then fade to 0 by x=1000
+        if x < 400:
+            alpha = 240 # Very dark on left
+        elif x < 900:
+            # Linear fade
+            alpha = int(240 * (1 - (x - 400) / 500))
+        else:
+            alpha = 0
+
+        draw.line([(x, 0), (x, height)], fill=alpha)
+
+    # Create black layer
+    black_layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    # Apply gradient as alpha
+    black_layer.putalpha(gradient)
+
+    # Paste/Composite
+    image.paste(black_layer, (0, 0), black_layer)
+    return image
+
 def generate_thumbnail(anime):
     title = anime['title']['english'] or anime['title']['romaji']
     poster_url = anime['coverImage']['extraLarge']
     score = anime['averageScore']
     genres = anime['genres'][:3]
     desc = (anime['description'] or "").replace("<br>", " ").replace("<i>", "").replace("</i>", "")
-    desc = " ".join(desc.split()[:40]) + "..." # Shorter desc for larger text
+    desc = " ".join(desc.split()[:40]) + "..."
 
-    # Background
-    bg = generate_hex_background()
+    # 1. Prepare Background
+    if os.path.exists("background.jpg"):
+        bg = Image.open("background.jpg").convert("RGBA")
+        bg = bg.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
+    else:
+        # Fallback to dark blue if missing
+        bg = Image.new("RGBA", (CANVAS_WIDTH, CANVAS_HEIGHT), (20, 35, 60))
+
+    # Apply gradient to background for text visibility
+    bg = add_gradient(bg)
     canvas = bg.copy()
     draw = ImageDraw.Draw(canvas)
 
-    # 1. Logo (Top Left)
+    # 2. Prepare Poster & Mask
+    try:
+        poster_resp = requests.get(poster_url)
+        poster = Image.open(BytesIO(poster_resp.content)).convert("RGBA")
+
+        # Resize poster to fill canvas (keeping aspect ratio, crop center/top)
+        # We want the poster to fill the mask area which is mostly on the right/center
+        aspect = poster.width / poster.height
+        target_aspect = CANVAS_WIDTH / CANVAS_HEIGHT
+
+        if aspect > target_aspect:
+            new_height = CANVAS_HEIGHT
+            new_width = int(new_height * aspect)
+            poster = poster.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            # Center crop
+            left = (new_width - CANVAS_WIDTH) // 2
+            poster = poster.crop((left, 0, left + CANVAS_WIDTH, new_height))
+        else:
+            new_width = CANVAS_WIDTH
+            new_height = int(new_width / aspect)
+            poster = poster.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            # Top crop (faces are usually at top)
+            poster = poster.crop((0, 0, CANVAS_WIDTH, CANVAS_HEIGHT))
+
+        # Load PLP mask
+        if os.path.exists("plp.jpg"):
+            mask = Image.open("plp.jpg").convert("L")
+            mask = mask.resize((CANVAS_WIDTH, CANVAS_HEIGHT), Image.Resampling.LANCZOS)
+
+            # Apply mask
+            # Paste poster onto canvas using mask
+            canvas.paste(poster, (0, 0), mask)
+        else:
+            print("Warning: plp.jpg not found, skipping masking")
+            # Just paste poster on right side as fallback? No, let's keep background.
+            pass
+
+    except Exception as e:
+        print(f"Error loading poster: {e}")
+
+    # 3. Draw Text & UI (Left Side)
+
+    # Logo (Top Left)
     icon_x, icon_y = 50, 40
     sz = 18
+    # Simple logo icon
     draw.polygon([(icon_x, icon_y+sz), (icon_x+sz, icon_y), (icon_x+2*sz, icon_y+sz), (icon_x+sz, icon_y+2*sz)], outline=LOGO_COLOR, width=3)
     draw.polygon([(icon_x+10, icon_y+sz), (icon_x+sz+10, icon_y), (icon_x+2*sz+10, icon_y+sz), (icon_x+sz+10, icon_y+2*sz)], outline=LOGO_COLOR, width=3)
     draw.text((icon_x + 65, icon_y + 2), "ANIME FLICKER", font=LOGO_FONT, fill=LOGO_COLOR)
 
-    # 2. Rating (Below Logo)
+    # Rating
     if score:
         rating_text = f"{score/10:.1f}+ Rating"
         draw.text((50, 140), rating_text, font=REG_FONT, fill=TEXT_COLOR)
 
-    # 3. Title (Large, Below Rating)
+    # Title
+    # Use max width for title
     title_lines = wrap_text(title.upper(), TITLE_FONT, 700)
     title_y = 180
-    for line in title_lines[:2]:
+    for line in title_lines[:2]: # Max 2 lines
         draw.text((50, title_y), line, font=TITLE_FONT, fill=TEXT_COLOR)
-        title_y += 140 # Height
+        title_y += 140
 
-    # 4. Genres (Below Title)
+    # Genres
     genre_text = ", ".join(genres).upper()
     draw.text((50, title_y + 10), genre_text, font=GENRE_FONT, fill=GENRE_COLOR)
 
-    # 5. Description (Below Genres)
+    # Description
     desc_y = title_y + 60
     desc_lines = wrap_text(desc, REG_FONT, 580)
-    for line in desc_lines[:4]: # Fewer lines because text is bigger
+    for line in desc_lines[:4]: # Max 4 lines
         draw.text((50, desc_y), line, font=REG_FONT, fill=SUBTEXT_COLOR)
         desc_y += 42
 
-    # 6. Buttons (Bottom Left)
+    # Buttons
     btn_y = 620
     btn_width = 210
     btn_height = 65
@@ -156,66 +197,6 @@ def generate_thumbnail(anime):
     text_w = BOLD_FONT.getlength("JOIN NOW")
     text_x = btn2_x + (btn_width - text_w) / 2
     draw.text((text_x, btn_y + 12), "JOIN NOW", font=BOLD_FONT, fill=TEXT_COLOR)
-
-
-    # 7. Right Side Honeycomb Poster
-    poster_resp = requests.get(poster_url)
-    poster = Image.open(BytesIO(poster_resp.content)).convert("RGBA")
-
-    start_x = 550
-    width = CANVAS_WIDTH - start_x + 100
-    height = CANVAS_HEIGHT
-
-    # Resize poster
-    aspect = poster.width / poster.height
-    target_aspect = width / height
-
-    if aspect > target_aspect:
-        new_height = height
-        new_width = int(new_height * aspect)
-        poster = poster.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        left = (new_width - width) // 2
-        poster = poster.crop((left, 0, left + width, new_height))
-    else:
-        new_width = width
-        new_height = int(new_width / aspect)
-        poster = poster.resize((new_width, new_height), Image.Resampling.LANCZOS)
-        top = (new_height - height) // 2
-        poster = poster.crop((0, top, width, top + height))
-
-    # Mask Generation
-    mask = Image.new("L", (width, height), 0)
-    mask_draw = ImageDraw.Draw(mask)
-
-    overlay = Image.new("RGBA", (width, height), (0,0,0,0))
-    overlay_draw = ImageDraw.Draw(overlay)
-
-    hex_radius = 160
-    gap = 8
-
-    dx = math.sqrt(3) * hex_radius
-    dy = 1.5 * hex_radius
-
-    cols = int(CANVAS_WIDTH / dx) + 2
-    rows = int(CANVAS_HEIGHT / dy) + 2
-
-    for row in range(-1, rows):
-        for col in range(-1, cols):
-            global_cx = col * dx
-            if row % 2 == 1:
-                global_cx += dx / 2
-            global_cy = row * dy
-
-            local_cx = global_cx - start_x
-            local_cy = global_cy
-
-            if global_cx > 650:
-                draw_regular_polygon(mask_draw, (local_cx, local_cy), hex_radius - gap, fill=255)
-                draw_regular_polygon(overlay_draw, (local_cx, local_cy), hex_radius - gap, outline=HONEYCOMB_OUTLINE_COLOR, width=HONEYCOMB_STROKE)
-
-    poster.putalpha(mask)
-    canvas.paste(poster, (start_x, 0), poster)
-    canvas.paste(overlay, (start_x, 0), overlay)
 
     final = BytesIO()
     canvas.convert("RGB").save(final, "PNG")
